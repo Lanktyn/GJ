@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gravity Guard</title>
+<style>
+:root{--bg:#111118;--card:#25252d;--red:#e9435a;--txt:#fff;--sky:#6fd3ff;--gold:#f2b84b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--txt);font-family:"Fredoka","Trebuchet MS",system-ui,sans-serif;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+#wrap{position:relative;width:100%;height:100%}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{position:absolute;top:10px;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:0 14px;pointer-events:none}
+#sc{font-size:44px;font-weight:700;line-height:1;text-shadow:0 2px 0 #0008}
+#sc small{display:block;font-size:12px;letter-spacing:.15em;color:#9aa;font-weight:600}
+#sc.bump{animation:b .12s}
+@keyframes b{50%{transform:scale(1.12);color:var(--sky)}}
+#info{font-size:13px;color:#cfd;margin-top:6px;letter-spacing:.05em}
+#bar{width:120px;height:6px;background:#2c2c38;border-radius:4px;margin-top:4px;overflow:hidden}
+#bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sky),var(--red))}
+.btns{display:flex;gap:8px;pointer-events:auto}
+.btns button{width:44px;height:44px;border-radius:14px;border:0;background:var(--card);color:#fff;font-size:18px;cursor:pointer}
+#ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000a;padding:14px;box-sizing:border-box}
+#ov.hide{display:none}
+.panel{width:min(560px,100%);display:flex;flex-direction:column;gap:10px}
+.row{display:flex;align-items:center;gap:14px;background:var(--card);border-radius:26px;padding:8px 18px 8px 8px;font-size:clamp(15px,3.6vw,21px);font-weight:700}
+.row .ic{flex:0 0 64px;height:56px;border-radius:18px;background:#111116;display:flex;align-items:center;justify-content:center;font-size:28px}
+.big{font-size:34px;font-weight:700;text-align:center;margin:0 0 4px}
+.go{border:0;background:var(--red);color:#fff;font:700 24px inherit;font-family:inherit;border-radius:40px;padding:18px;cursor:pointer;margin-top:4px}
+.go:active{transform:scale(.98)}
+.sub{text-align:center;color:#bbc;font-size:18px}
+</style></head><body>
+<div id="wrap"><canvas id="c"></canvas>
+<div id="hud"><div><div id="sc"><small>SCORE</small><span id="s">0</span></div><div id="info">GATE 0 · 10 pts/sec</div><div id="bar"><i id="bi"></i></div></div>
+<div class="btns"><button id="mu" aria-label="Sound">🔊</button><button id="pa" aria-label="Pause">⏸</button></div></div>
+<div id="ov"><div class="panel" id="pn"></div></div></div>
+<script>(()=>{
+const wrap=document.getElementById('wrap'),cv=document.getElementById('c'),ctx=cv.getContext('2d'),$=id=>document.getElementById(id);
+const PW=18,PH=30,G=2600,BG='#111118',SLATE='#4b5180',SKY='#6fd3ff',GOLD='#f2b84b';
+let W,H,ch,top,bot,S,state='intro',best=0,muted=false,last=0;
+try{best=+localStorage.getItem('gg_best')||0}catch(e){}
+function resize(){const r=wrap.getBoundingClientRect(),d=devicePixelRatio||1;W=r.width;H=r.height;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);ch=Math.max(240,Math.min(400,H*.55));top=(H-ch)/2+14;bot=top+ch;if(S&&S.grounded)S.y=S.dir>0?bot-PH:top;if(S)S.gy=S.gdir>0?bot-PH:top}
+function reset(){S={px:0,y:bot-PH,vy:0,dir:1,grounded:true,speed:320,t:0,score:0,acc:0,segs:[],cur:700,n:0,gap:170,gy:bot-PH,gvy:0,gdir:1,gq:[],stuck:false,wasStuck:false,pops:[],gate:0,anim:0};resize();gen();hud()}
+function gen(){while(S.cur<S.px+W*2+500){const sp=S.speed*.85+130;if(S.n%6===5){S.segs.push({t:'gate',x:S.cur,w:10});S.cur+=sp*.7}else{const r=Math.random(),t=r<.25?'gapF':r<.5?'gapC':r<.75?'wallF':'wallC',w=t[0]==='g'?110+S.speed*.22:34;S.segs.push({t,x:S.cur,w});S.cur+=w+sp}S.n++}S.segs=S.segs.filter(s=>s.x+s.w>S.px-600)}
+const solid=(x,k)=>!S.segs.some(s=>s.t===k&&x>=s.x&&x<=s.x+s.w);
+const wallRect=s=>{const h=ch*.55;return{x:s.x,w:s.w,y:s.t==='wallF'?bot-h:top,h}};
+/* AUDIO */
+let AC,master,mg,sg,mT,step=0,nextT=0,spb=.14;
+function initAudio(){if(AC)return;AC=new(window.AudioContext||window.webkitAudioContext)();master=AC.createGain();master.gain.value=muted?0:.8;master.connect(AC.destination);mg=AC.createGain();mg.gain.value=.15;mg.connect(master);sg=AC.createGain();sg.gain.value=.55;sg.connect(master)}
+function tone(f,d,type,v,at,f2,dest){if(!AC)return;const t=at||AC.currentTime,o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(f,t);if(f2)o.frequency.exponentialRampToValueAtTime(f2,t+d);g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.001,t+d);o.connect(g);g.connect(dest||sg);o.start(t);o.stop(t+d+.03)}
+const mtof=n=>440*2**((n-69)/12);
+const sfx={flip:d=>tone(d>0?700:300,.13,'square',.22,0,d>0?260:760),tick:()=>tone(1500,.03,'triangle',.05),gate:()=>[0,4,7,12].forEach((n,i)=>tone(mtof(72+n),.18,'square',.18,AC&&AC.currentTime+i*.06)),stuck:()=>tone(110,.25,'sawtooth',.25,0,70),over:()=>[0,1,2,3].forEach(i=>tone(mtof(64-i*3),.25,'sawtooth',.25,AC&&AC.currentTime+i*.14,mtof(60-i*3))),start:()=>tone(500,.2,'square',.2,0,1000)};
+const roots=[45,41,48,43],chords=[[57,60,64],[53,57,60],[60,64,67],[55,59,62]];
+function note(s,t){const b=(s>>4)&3,k=s&15;if(k%2===0)tone(mtof(roots[b]),spb*1.7,'triangle',.55,t,0,mg);if(k%4===0)tone(150,.12,'sine',.7,t,40,mg);if(k%2===1)tone(9000,.02,'square',.025,t,0,mg);tone(mtof(chords[b][[0,1,2,1][k&3]]+12),.11,'square',.09,t,0,mg)}
+function sched(){if(state!=='play'||!AC)return;spb=60/(105+Math.min(S.speed,900)/9)/4;while(nextT<AC.currentTime+.2){note(step,nextT);nextT+=spb;step++}}
+function musicOn(){if(!AC)return;AC.resume();nextT=AC.currentTime+.05;if(!mT)mT=setInterval(sched,40)}
+/* FLOW */
+function ui(h){const o=$('ov');o.classList.toggle('hide',!h)}
+function showIntro(){$('pn').innerHTML=`<div class="big">Gravity Guard</div><div class="row"><div class="ic">☝️</div>Tap to flip gravity. You can only flip while your feet are on a surface.</div><div class="row"><div class="ic">↕️</div>Flip to the other side to cross gaps and walls!</div><div class="row"><div class="ic">🚔</div>Get stuck on a wall and the guard catches you!</div><div class="row"><div class="ic">⚡</div>Every gate is faster and pays more!</div><button class="go" id="go">Got it!</button>`;$('go').onclick=e=>{e.stopPropagation();start()};ui(true)}
+function start(){initAudio();reset();state='play';ui(false);sfx.start();step=0;musicOn()}
+function pause(){if(state!=='play')return;state='pause';if(AC)AC.suspend();$('pn').innerHTML=`<div class="big">Paused</div><div class="sub">Score ${S.score}</div><button class="go" id="rs">Resume</button>`;$('rs').onclick=e=>{e.stopPropagation();resume()};ui(true);$('pa').textContent='▶'}
+function resume(){if(state!=='pause')return;state='play';ui(false);$('pa').textContent='⏸';last=performance.now();musicOn()}
+function over(why){state='over';sfx.over();if(S.score>best){best=S.score;try{localStorage.setItem('gg_best',best)}catch(e){}}$('pn').innerHTML=`<div class="big">${why||'Caught! 🚔'}</div><div class="sub">Score ${S.score} · Best ${best}<br>Gates passed ${S.gate}</div><button class="go" id="ag">Play again</button>`;$('ag').onclick=e=>{e.stopPropagation();start()};setTimeout(()=>ui(true),450)}
+function flip(){if(state!=='play'||!S.grounded)return;S.dir*=-1;S.gq.push(S.t+S.gap/S.speed);S.grounded=false;S.vy=S.dir*140;sfx.flip(S.dir)}
+function hud(){$('s').textContent=S.score;$('info').textContent=`GATE ${S.gate} · 10 pts/sec`;$('bi').style.width=Math.min(100,(S.speed-320)/580*100)+'%'}
+function pop(txt,col,size,dx,dy){S.pops.push({x:S.px+dx,y:dy,txt,col,size,l:1})}
+/* UPDATE */
+function update(dt){
+ S.t+=dt;S.speed=Math.min(900,S.speed+dt*7);S.anim+=dt*S.speed/38;
+ S.acc+=dt;while(S.acc>=.1){S.acc-=.1;S.score++;sfx.tick();pop('+1',SKY,15,PW/2+(Math.random()*16-8),S.dir>0?S.y-8:S.y+PH+16);const e=$('sc');e.classList.remove('bump');void e.offsetWidth;e.classList.add('bump');hud()}
+ // horizontal
+ let nx=S.px+S.speed*dt;S.stuck=false;
+ for(const s of S.segs){if(s.t[0]!=='w')continue;const r=wallRect(s);if(nx+PW>r.x&&nx<r.x+r.w&&S.y+PH>r.y&&S.y<r.y+r.h&&S.px+PW<=r.x+6){nx=r.x-PW;S.stuck=true}}
+ S.px=nx;
+ if(S.stuck&&!S.wasStuck)sfx.stuck();S.wasStuck=S.stuck;
+ // vertical
+ const pb=S.y+PH,py=S.y;S.vy+=G*S.dir*dt;S.y+=S.vy*dt;S.grounded=false;const cx=S.px+PW/2;
+ if(S.dir>0&&S.y+PH>=bot&&pb<=bot+4&&solid(cx,'gapF')){S.y=bot-PH;S.vy=0;S.grounded=true}
+ if(S.dir<0&&S.y<=top&&py>=top-4&&solid(cx,'gapC')){S.y=top;S.vy=0;S.grounded=true}
+ if(S.y>bot+110||S.y+PH<top-110)return over('Fell into the void! 🕳️');
+ // gates
+ for(const s of S.segs)if(s.t==='gate'&&!s.p&&S.px>s.x){s.p=1;S.gate++;const b=25*S.gate;S.score+=b;S.speed*=1.1;sfx.gate();pop('GATE +'+b,GOLD,26,0,(top+bot)/2);hud()}
+ // guard
+ while(S.gq.length&&S.gq[0]<=S.t){S.gq.shift();S.gdir*=-1;S.gvy=S.gdir*140}
+ S.gvy+=G*S.gdir*dt;S.gy+=S.gvy*dt;if(S.gdir>0&&S.gy>=bot-PH){S.gy=bot-PH;S.gvy=0}if(S.gdir<0&&S.gy<=top){S.gy=top;S.gvy=0}
+ S.gap=S.stuck?S.gap-S.speed*.6*dt:Math.min(170,S.gap+S.speed*.12*dt);
+ if(S.gap<=26)return over('Caught! 🚔');
+ gen();
+ for(const p of S.pops){p.l-=dt*1.4;p.y-=dt*50}S.pops=S.pops.filter(p=>p.l>0);
+}
+/* DRAW */
+function man(x,y,fl,ph,guard,run){ctx.save();ctx.translate(x,fl?y+PH:y);if(fl)ctx.scale(1,-1);
+ const c=guard?'#3b3f8f':'#fff',o=run?Math.sin(ph)*3:0;
+ ctx.fillStyle=guard?'#e8a07a':'#fff';ctx.beginPath();ctx.arc(0,5,5,0,7);ctx.fill();
+ if(guard){ctx.fillStyle='#262a66';ctx.fillRect(-6,-1,12,4);ctx.fillRect(-2,-3,9,3)}
+ ctx.fillStyle=c;ctx.fillRect(-3,10,6,11);ctx.fillRect(-8,12+(run?o*.4:0),16,3);
+ ctx.fillRect(-5+o,21,4,9-Math.abs(o)*.4);ctx.fillRect(1-o,21,4,9-Math.abs(o)*.4);
+ if(guard){ctx.fillStyle='#e9435a';ctx.fillRect(-10,11,4,4)}ctx.restore()}
+function draw(){
+ ctx.fillStyle=BG;ctx.fillRect(0,0,W,H);
+ const sx=Math.max(140,W*.3),cam=S.px-sx;
+ ctx.strokeStyle='#1b1b26';ctx.lineWidth=2;for(let x=-((cam*.4)%140);x<W;x+=140){ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,bot);ctx.stroke()}
+ // surfaces
+ const surf=(y,up)=>{ctx.fillStyle=SLATE;ctx.fillRect(0,up?y-14:y,W,14);ctx.fillStyle=SKY;ctx.fillRect(0,up?y-4:y,W,4)};
+ surf(bot,false);surf(top,true);
+ for(const s of S.segs){const x=s.x-cam;if(x>W+50||x+s.w<-50)continue;
+  if(s.t==='gapF'||s.t==='gapC'){const f=s.t==='gapF',y=f?bot:top-14;ctx.fillStyle=BG;ctx.fillRect(x,y,s.w,14);ctx.fillStyle='#8a3a55';ctx.fillRect(x+2,f?bot+5:top-8,s.w-4,3)}
+  else if(s.t[0]==='w'){const r=wallRect(s),f=s.t==='wallF';ctx.fillStyle=SLATE;ctx.beginPath();ctx.roundRect(x,r.y,r.w,r.h,5);ctx.fill();ctx.fillStyle=GOLD;const a=f?r.y+3:r.y+r.h-7,b=f?r.y+12:r.y+r.h-16;ctx.fillRect(x,a,r.w,4);ctx.fillRect(x,b,r.w,4)}
+  else{ctx.globalAlpha=s.p?.35:1;ctx.fillStyle='#b8923a';ctx.fillRect(x,top,s.w,ch);ctx.fillStyle=GOLD;ctx.font='700 22px sans-serif';ctx.textAlign='left';ctx.fillText('≡→',x+22,(top+bot)/2);ctx.globalAlpha=1}}
+ // characters
+ const fl=S.dir<0,run=S.grounded&&!S.stuck;
+ if(state!=='intro'){man(sx-S.gap+PW/2,S.gy,S.gdir<0,S.anim,true,S.gy>=bot-PH-1||S.gy<=top+1)}
+ man(sx+PW/2,S.y,fl,S.anim,false,run);
+ if(S.stuck){ctx.fillStyle='#e9435a';ctx.beginPath();ctx.arc(sx+PW/2+26,S.y-8,12,0,7);ctx.fill();ctx.fillStyle='#fff';ctx.font='700 16px sans-serif';ctx.textAlign='center';ctx.fillText('!',sx+PW/2+26,S.y-2)}
+ // pops
+ ctx.textAlign='center';for(const p of S.pops){ctx.globalAlpha=Math.max(0,p.l);ctx.fillStyle=p.col;ctx.font=`700 ${p.size}px "Trebuchet MS",sans-serif`;ctx.fillText(p.txt,p.x-cam,p.y)}ctx.globalAlpha=1;
+}
+function loop(t){const dt=Math.min(.033,(t-last)/1000||0);last=t;if(state==='play')update(dt);else if(state==='over'){for(const p of S.pops)p.l-=dt}draw();requestAnimationFrame(loop)}
+/* INPUT */
+cv.addEventListener('pointerdown',e=>{e.preventDefault();flip()});
+addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();flip()}if(e.code==='KeyP'||e.code==='Escape')state==='play'?pause():resume()});
+$('pa').onclick=()=>state==='play'?pause():resume();
+$('mu').onclick=()=>{muted=!muted;$('mu').textContent=muted?'🔇':'🔊';if(master)master.gain.value=muted?0:.8};
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pause()});
+addEventListener('resize',resize);
+resize();reset();showIntro();requestAnimationFrame(loop);
+})();
+</script></body></html>
